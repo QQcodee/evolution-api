@@ -107,7 +107,7 @@ export class WebhookController extends EventController implements EventControlle
       if (Array.isArray(webhookLocal) && webhookLocal.includes(we)) {
         // Only batch specific events (e.g., incoming messages)
         if (event === 'message.in') {
-          const senderId = sender?.id || 'unknown_sender';
+          const senderId = sender || 'unknown_sender';
 
           // Initialize queue if not present
           if (!this.messageQueues.has(senderId)) {
@@ -245,7 +245,7 @@ export class WebhookController extends EventController implements EventControlle
 
     const combinedPayload = {
       event: 'message.batch',
-      instance: instance.instanceId,
+      instance: instance,
       sender: { id: senderId },
       messages: messages,
       server_url: serverUrl,
