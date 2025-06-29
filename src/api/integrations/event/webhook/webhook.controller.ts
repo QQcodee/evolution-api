@@ -12,6 +12,9 @@ import { EmitData, EventController, EventControllerInterface } from '../event.co
 
 export class WebhookController extends EventController implements EventControllerInterface {
   private readonly logger = new Logger('WebhookController');
+  private messageQueues: Map<string, Array<any>> = new Map();
+  private batchingTimers: Map<string, NodeJS.Timeout> = new Map();
+  private readonly INACTIVITY_DELAY_MS = 15000; // Example: 15 seconds
 
   constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
     super(prismaRepository, waMonitor, true, 'webhook');
@@ -102,6 +105,37 @@ export class WebhookController extends EventController implements EventControlle
 
     if (local && instance?.enabled) {
       if (Array.isArray(webhookLocal) && webhookLocal.includes(we)) {
+        // Only batch specific events (e.g., incoming messages)
+        if (event === 'message.in') {
+          const senderId = sender?.id || 'unknown_sender';
+
+          // Initialize queue if not present
+          if (!this.messageQueues.has(senderId)) {
+            this.messageQueues.set(senderId, []);
+          }
+
+          this.messageQueues.get(senderId)!.push({
+            event,
+            data,
+            dateTime,
+          });
+
+          // Clear existing timer if active
+          if (this.batchingTimers.has(senderId)) {
+            clearTimeout(this.batchingTimers.get(senderId)!);
+          }
+
+          // Start/reset inactivity timeout
+          this.batchingTimers.set(
+            senderId,
+            setTimeout(() => {
+              this.flushMessageQueue(senderId, instance, webhookHeaders, origin, serverUrl, apiKey);
+            }, this.INACTIVITY_DELAY_MS),
+          );
+
+          return; // Don't send now — wait for batching
+        }
+
         let baseURL: string;
 
         if (instance?.webhookByEvents) {
@@ -195,6 +229,52 @@ export class WebhookController extends EventController implements EventControlle
           });
         }
       }
+    }
+  }
+
+  private async flushMessageQueue(
+    senderId: string,
+    instance: wa.LocalWebHook,
+    webhookHeaders: Record<string, string>,
+    origin: string,
+    serverUrl: string,
+    apiKey: string,
+  ) {
+    const messages = this.messageQueues.get(senderId);
+    if (!messages || messages.length === 0) return;
+
+    const combinedPayload = {
+      event: 'message.batch',
+      instance: instance.instanceId,
+      sender: { id: senderId },
+      messages: messages,
+      server_url: serverUrl,
+      apikey: apiKey,
+      date_time: new Date().toISOString(),
+    };
+
+    // Clean up
+    this.messageQueues.delete(senderId);
+    this.batchingTimers.delete(senderId);
+
+    const transformedWe = 'message-batch';
+
+    const baseURL = instance.webhookByEvents ? `${instance.url}/${transformedWe}` : instance.url;
+
+    const httpService = axios.create({
+      baseURL,
+      headers: webhookHeaders,
+      timeout: configService.get<Webhook>('WEBHOOK').REQUEST?.TIMEOUT_MS ?? 30000,
+    });
+
+    try {
+      await this.retryWebhookRequest(httpService, combinedPayload, `${origin}.flushMessageQueue`, baseURL, serverUrl);
+    } catch (err) {
+      this.logger.error({
+        local: `${origin}.flushMessageQueue`,
+        message: `Failed to send batched messages: ${err?.message}`,
+        url: baseURL,
+      });
     }
   }
 
