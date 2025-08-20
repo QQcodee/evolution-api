@@ -9,6 +9,11 @@ export class EventDto {
     headers?: JsonValue;
     byEvents?: boolean;
     base64?: boolean;
+    buffer?: {
+      enabled?: boolean;
+      timeout?: number; // Time in milliseconds to wait before sending buffered messages
+      maxSize?: number; // Maximum number of messages to buffer before sending
+    };
   };
 
   websocket?: {

@@ -99,6 +99,11 @@ export declare namespace wa {
     headers?: JsonValue;
     webhookByEvents?: boolean;
     webhookBase64?: boolean;
+    webhook_buffer?: {
+      enabled?: boolean;
+      timeout?: number;
+      maxSize?: number;
+    };
   };
 
   export type LocalPusher = LocalEvent & {

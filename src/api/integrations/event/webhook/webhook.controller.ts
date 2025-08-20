@@ -12,9 +12,44 @@ import { EmitData, EventController, EventControllerInterface } from '../event.co
 
 export class WebhookController extends EventController implements EventControllerInterface {
   private readonly logger = new Logger('WebhookController');
+  
+  // Buffer for messages by instanceName, event, and remoteJid
+  private messageBuffer: Map<string, {
+    messages: any[];
+    timer: ReturnType<typeof setTimeout> | null;
+    baseURL: string;
+    headers?: Record<string, string>;
+    origin: string;
+    serverUrl: string;
+  }> = new Map();
+  
+  // Default buffer settings
+  private readonly defaultBufferTimeout = 3000; // 3 seconds
+  private readonly defaultMaxBufferSize = 10; // 10 messages
 
   constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
     super(prismaRepository, waMonitor, true, 'webhook');
+  }
+  
+  /**
+   * Flush all message buffers
+   */
+  private async flushAllBuffers(): Promise<void> {
+    this.logger.log({
+      local: 'WebhookController.flushAllBuffers',
+      message: `Flushing all message buffers (${this.messageBuffer.size} buffers)`,
+    });
+    
+    for (const bufferKey of this.messageBuffer.keys()) {
+      try {
+        await this.flushBuffer(bufferKey);
+      } catch (error) {
+        this.logger.error({
+          local: 'WebhookController.flushAllBuffers',
+          message: `Error flushing buffer ${bufferKey}: ${error?.message}`,
+        });
+      }
+    }
   }
 
   override async set(instanceName: string, data: EventDto): Promise<wa.LocalWebHook> {
@@ -30,6 +65,13 @@ export class WebhookController extends EventController implements EventControlle
       }
     }
 
+    // Prepare buffer settings from data or use defaults
+    const bufferSettings = {
+      enabled: data.webhook?.buffer?.enabled ?? false,
+      timeout: data.webhook?.buffer?.timeout ?? this.defaultBufferTimeout,
+      maxSize: data.webhook?.buffer?.maxSize ?? this.defaultMaxBufferSize,
+    };
+
     return this.prisma.webhook.upsert({
       where: {
         instanceId: this.monitor.waInstances[instanceName].instanceId,
@@ -41,6 +83,8 @@ export class WebhookController extends EventController implements EventControlle
         headers: data.webhook?.headers,
         webhookBase64: data.webhook.base64,
         webhookByEvents: data.webhook.byEvents,
+        // Store buffer settings as JSON in webhook_buffer column
+        webhook_buffer: bufferSettings,
       },
       create: {
         enabled: data.webhook?.enabled,
@@ -50,6 +94,8 @@ export class WebhookController extends EventController implements EventControlle
         headers: data.webhook?.headers,
         webhookBase64: data.webhook.base64,
         webhookByEvents: data.webhook.byEvents,
+        // Store buffer settings as JSON in webhook_buffer column
+        webhook_buffer: bufferSettings,
       },
     });
   }
@@ -89,6 +135,16 @@ export class WebhookController extends EventController implements EventControlle
     const enabledLog = configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS');
     const regex = /^(https?:\/\/)/;
 
+    // Get buffer settings from instance configuration or use defaults
+    const bufferEnabled = instance?.webhook_buffer?.enabled ?? false;
+    const bufferTimeout = instance?.webhook_buffer?.timeout ?? this.defaultBufferTimeout;
+    const maxBufferSize = instance?.webhook_buffer?.maxSize ?? this.defaultMaxBufferSize;
+
+    // Check if the event should be buffered (exclude non-message events and status events)
+    const shouldBuffer = bufferEnabled && 
+      ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'MESSAGES_UPDATE'].includes(we) &&
+      data && typeof data === 'object';
+
     const webhookData = {
       event,
       instance: instanceName,
@@ -114,6 +170,7 @@ export class WebhookController extends EventController implements EventControlle
           const logData = {
             local: `${origin}.sendData-Webhook`,
             url: baseURL,
+            buffered: shouldBuffer,
             ...webhookData,
           };
 
@@ -122,13 +179,29 @@ export class WebhookController extends EventController implements EventControlle
 
         try {
           if (instance?.enabled && regex.test(instance.url)) {
-            const httpService = axios.create({
-              baseURL,
-              headers: webhookHeaders as Record<string, string> | undefined,
-              timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
-            });
+            // If buffering is enabled for this event, add it to the buffer
+            if (shouldBuffer) {
+              this.bufferMessage(
+                instanceName, 
+                event,
+                data, 
+                baseURL, 
+                webhookHeaders, 
+                origin, 
+                serverUrl, 
+                bufferTimeout, 
+                maxBufferSize
+              );
+            } else {
+              // For non-buffered events, send immediately
+              const httpService = axios.create({
+                baseURL,
+                headers: webhookHeaders as Record<string, string> | undefined,
+                timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
+              });
 
-            await this.retryWebhookRequest(httpService, webhookData, `${origin}.sendData-Webhook`, baseURL, serverUrl);
+              await this.retryWebhookRequest(httpService, webhookData, `${origin}.sendData-Webhook`, baseURL, serverUrl);
+            }
           }
         } catch (error) {
           this.logger.error({
@@ -167,6 +240,7 @@ export class WebhookController extends EventController implements EventControlle
 
         try {
           if (regex.test(globalURL)) {
+            // Global webhooks are always sent immediately (no buffering)
             const httpService = axios.create({
               baseURL: globalURL,
               timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
@@ -299,6 +373,129 @@ export class WebhookController extends EventController implements EventControlle
         message: `JWT generation failed: ${error?.message}`,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Add a message to the buffer for a specific instance, event, and remote jid
+   */
+  private bufferMessage(
+    instanceName: string,
+    event: string,
+    data: any,
+    baseURL: string,
+    headers: Record<string, string> | undefined,
+    origin: string,
+    serverUrl: string,
+    bufferTimeout: number,
+    maxBufferSize: number,
+  ): void {
+    // Generate a unique key for this instance+event combination
+    // For events with remoteJid, include that to separate by chat
+    const remoteJid = data.key?.remoteJid || data.remoteJid || 'global';
+    const bufferKey = `${instanceName}:${event}:${remoteJid}`;
+    
+    // Check if we already have a buffer for this key
+    if (!this.messageBuffer.has(bufferKey)) {
+      // Create a new buffer
+      this.messageBuffer.set(bufferKey, {
+        messages: [],
+        timer: null,
+        baseURL,
+        headers,
+        origin,
+        serverUrl,
+      });
+    }
+    
+    // Get the buffer
+    const buffer = this.messageBuffer.get(bufferKey);
+    
+    // Add the message
+    buffer.messages.push(data);
+    
+    // If this is the first message, start the timer
+    if (buffer.timer === null) {
+      buffer.timer = setTimeout(() => {
+        this.flushBuffer(bufferKey);
+      }, bufferTimeout);
+    }
+    
+    // If we've reached the maximum buffer size, flush immediately
+    if (buffer.messages.length >= maxBufferSize) {
+      if (buffer.timer) {
+        clearTimeout(buffer.timer);
+        buffer.timer = null;
+      }
+      this.flushBuffer(bufferKey);
+    }
+  }
+  
+  /**
+   * Flush the buffer for a specific key
+   */
+  private async flushBuffer(bufferKey: string): Promise<void> {
+    // Get the buffer
+    const buffer = this.messageBuffer.get(bufferKey);
+    
+    if (!buffer || buffer.messages.length === 0) {
+      this.messageBuffer.delete(bufferKey);
+      return;
+    }
+    
+    // Clear the timer
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+      buffer.timer = null;
+    }
+    
+    const { messages, baseURL, headers, origin, serverUrl } = buffer;
+    
+    // Create a payload with the buffered messages
+    const webhookData = {
+      event: bufferKey.split(':')[1],
+      instance: bufferKey.split(':')[0],
+      data: messages,
+      count: messages.length,
+      isBuffered: true,
+      destination: baseURL,
+      date_time: new Date().toISOString(),
+      server_url: serverUrl,
+    };
+    
+    // Remove the buffer before sending to prevent double-sending if an error occurs
+    this.messageBuffer.delete(bufferKey);
+    
+    try {
+      // Create HTTP service
+      const httpService = axios.create({
+        baseURL,
+        headers: headers as Record<string, string> | undefined,
+        timeout: configService.get<Webhook>('WEBHOOK').REQUEST?.TIMEOUT_MS ?? 30000,
+      });
+      
+      // Send the buffered messages
+      await this.retryWebhookRequest(
+        httpService,
+        webhookData,
+        `${origin}.sendData-Webhook-Buffered`,
+        baseURL,
+        serverUrl
+      );
+      
+      this.logger.log({
+        local: `${origin}.sendData-Webhook-Buffered`,
+        message: `Successfully sent ${messages.length} buffered messages`,
+        url: baseURL,
+      });
+    } catch (error) {
+      this.logger.error({
+        local: `${origin}.sendData-Webhook-Buffered`,
+        message: `Failed to send buffered messages: ${error?.message}`,
+        error: error?.errno,
+        url: baseURL,
+        server_url: serverUrl,
+      });
     }
   }
 }

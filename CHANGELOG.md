@@ -4,6 +4,7 @@
 
 * Add BaileysMessageProcessor for improved message handling and integrate rxjs for asynchronous processing
 * Enhance message processing with retry logic for error handling
+* Add webhook message buffering to reduce HTTP requests when users send consecutive messages
 
 ### Fixed
 
