@@ -163,9 +163,20 @@ export class WebhookController extends EventController implements EventControlle
     const maxBufferSize = bufferConfig?.maxSize ?? this.defaultMaxBufferSize;
 
     // Check if the event should be buffered (exclude non-message events and status events)
-    const shouldBuffer = bufferEnabled && 
-      ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'MESSAGES_UPDATE'].includes(we) &&
-      data && typeof data === 'object';
+    const isBufferableEvent = ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'MESSAGES_UPDATE'].includes(we);
+    const isValidData = data && typeof data === 'object';
+    
+    // Log the buffer eligibility check
+    this.logger.log({
+      local: 'WebhookController.bufferEligibility',
+      message: `Checking if event is eligible for buffering`,
+      event: we,
+      bufferEnabled: bufferEnabled,
+      isBufferableEvent: isBufferableEvent,
+      isValidData: isValidData
+    });
+    
+    const shouldBuffer = bufferEnabled && isBufferableEvent && isValidData;
 
     const webhookData = {
       event,
@@ -201,8 +212,25 @@ export class WebhookController extends EventController implements EventControlle
 
         try {
           if (instance?.enabled && regex.test(instance.url)) {
+            // Log buffering decision
+            this.logger.log({
+              local: `${origin}.bufferDecision`,
+              message: `Buffer decision for event ${event}: shouldBuffer=${shouldBuffer}, bufferEnabled=${bufferEnabled}`,
+              eventType: we,
+              isMessageType: ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'MESSAGES_UPDATE'].includes(we),
+              bufferConfig: JSON.stringify(bufferConfig),
+              dataType: typeof data
+            });
+            
             // If buffering is enabled for this event, add it to the buffer
             if (shouldBuffer) {
+              this.logger.log({
+                local: `${origin}.bufferMessage`,
+                message: `Buffering message for ${instanceName}:${event}:${data.key?.remoteJid || data.remoteJid || 'global'}`,
+                bufferTimeout,
+                maxBufferSize
+              });
+              
               this.bufferMessage(
                 instanceName, 
                 event,
@@ -216,6 +244,11 @@ export class WebhookController extends EventController implements EventControlle
               );
             } else {
               // For non-buffered events, send immediately
+              this.logger.log({
+                local: `${origin}.sendImmediate`,
+                message: `Sending message immediately (not buffered) for ${instanceName}:${event}`
+              });
+              
               const httpService = axios.create({
                 baseURL,
                 headers: webhookHeaders as Record<string, string> | undefined,
@@ -417,9 +450,22 @@ export class WebhookController extends EventController implements EventControlle
     const remoteJid = data.key?.remoteJid || data.remoteJid || 'global';
     const bufferKey = `${instanceName}:${event}:${remoteJid}`;
     
+    this.logger.log({
+      local: 'WebhookController.bufferMessage',
+      message: `Buffering message with key ${bufferKey}`,
+      timeout: bufferTimeout,
+      maxSize: maxBufferSize,
+      dataPreview: JSON.stringify(data).substring(0, 100) + '...',
+    });
+    
     // Check if we already have a buffer for this key
     if (!this.messageBuffer.has(bufferKey)) {
       // Create a new buffer
+      this.logger.log({
+        local: 'WebhookController.bufferMessage',
+        message: `Creating new buffer for key ${bufferKey}`
+      });
+      
       this.messageBuffer.set(bufferKey, {
         messages: [],
         timer: null,
@@ -438,9 +484,19 @@ export class WebhookController extends EventController implements EventControlle
     
     // If this is the first message, start the timer
     if (buffer.timer === null) {
-      buffer.timer = setTimeout(() => {
-        this.flushBuffer(bufferKey);
-      }, bufferTimeout);
+      this.logger.log({
+        local: 'WebhookController.bufferMessage',
+        message: `Starting timer for key ${bufferKey}, will flush in ${bufferTimeout}ms`,
+      });
+      
+      // Use a direct function reference instead of an arrow function to ensure proper context
+      buffer.timer = setTimeout(function(controller, key) {
+        controller.logger.log({
+          local: 'WebhookController.timerTriggered',
+          message: `Timer triggered for key ${key}, flushing buffer now`
+        });
+        controller.flushBuffer(key);
+      }, bufferTimeout, this, bufferKey);
     }
     
     // If we've reached the maximum buffer size, flush immediately
@@ -460,7 +516,18 @@ export class WebhookController extends EventController implements EventControlle
     // Get the buffer
     const buffer = this.messageBuffer.get(bufferKey);
     
+    this.logger.log({
+      local: 'WebhookController.flushBuffer',
+      message: `Attempting to flush buffer with key ${bufferKey}`,
+      hasBuffer: !!buffer,
+      messageCount: buffer?.messages?.length || 0
+    });
+    
     if (!buffer || buffer.messages.length === 0) {
+      this.logger.log({
+        local: 'WebhookController.flushBuffer',
+        message: `No messages to flush for key ${bufferKey}, deleting buffer`
+      });
       this.messageBuffer.delete(bufferKey);
       return;
     }
