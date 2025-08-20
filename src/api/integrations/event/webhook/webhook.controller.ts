@@ -66,13 +66,17 @@ export class WebhookController extends EventController implements EventControlle
     }
 
     // Prepare buffer settings from data or use defaults
-    const bufferSettings = {
-      enabled: data.webhook?.buffer?.enabled ?? false,
-      timeout: data.webhook?.buffer?.timeout ?? this.defaultBufferTimeout,
-      maxSize: data.webhook?.buffer?.maxSize ?? this.defaultMaxBufferSize,
+    const bufferSettings = data.webhook?.buffer ? {
+      enabled: data.webhook.buffer.enabled ?? false,
+      timeout: data.webhook.buffer.timeout ?? this.defaultBufferTimeout,
+      maxSize: data.webhook.buffer.maxSize ?? this.defaultMaxBufferSize,
+    } : {
+      enabled: false,
+      timeout: this.defaultBufferTimeout,
+      maxSize: this.defaultMaxBufferSize,
     };
 
-    return this.prisma.webhook.upsert({
+    return this.prisma[this.name].upsert({
       where: {
         instanceId: this.monitor.waInstances[instanceName].instanceId,
       },
@@ -136,9 +140,26 @@ export class WebhookController extends EventController implements EventControlle
     const regex = /^(https?:\/\/)/;
 
     // Get buffer settings from instance configuration or use defaults
-    const bufferEnabled = instance?.webhook_buffer?.enabled ?? false;
-    const bufferTimeout = instance?.webhook_buffer?.timeout ?? this.defaultBufferTimeout;
-    const maxBufferSize = instance?.webhook_buffer?.maxSize ?? this.defaultMaxBufferSize;
+    let bufferConfig: Record<string, any> = {};
+    
+    if (instance?.webhook_buffer) {
+      try {
+        if (typeof instance.webhook_buffer === 'string') {
+          bufferConfig = JSON.parse(instance.webhook_buffer);
+        } else if (typeof instance.webhook_buffer === 'object') {
+          bufferConfig = instance.webhook_buffer as Record<string, any>;
+        }
+      } catch (error) {
+        this.logger.error({
+          local: 'WebhookController.emit',
+          message: `Error parsing webhook buffer config: ${error?.message}`,
+        });
+      }
+    }
+    
+    const bufferEnabled = bufferConfig?.enabled ?? false;
+    const bufferTimeout = bufferConfig?.timeout ?? this.defaultBufferTimeout;
+    const maxBufferSize = bufferConfig?.maxSize ?? this.defaultMaxBufferSize;
 
     // Check if the event should be buffered (exclude non-message events and status events)
     const shouldBuffer = bufferEnabled && 
