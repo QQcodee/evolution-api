@@ -24,8 +24,9 @@ export class WebhookController extends EventController implements EventControlle
   }> = new Map();
   
   // Default buffer settings
-  private readonly defaultBufferTimeout = 3000; // 3 seconds
+  private readonly defaultBufferTimeout = 10000; // 3 seconds
   private readonly defaultMaxBufferSize = 10; // 10 messages
+  private readonly defaultBufferEnabled = true; // Enable buffering by default
 
   constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
     super(prismaRepository, waMonitor, true, 'webhook');
@@ -67,11 +68,11 @@ export class WebhookController extends EventController implements EventControlle
 
     // Prepare buffer settings from data or use defaults
     const bufferSettings = data.webhook?.buffer ? {
-      enabled: data.webhook.buffer.enabled ?? false,
+      enabled: data.webhook.buffer.enabled ?? this.defaultBufferEnabled,
       timeout: data.webhook.buffer.timeout ?? this.defaultBufferTimeout,
       maxSize: data.webhook.buffer.maxSize ?? this.defaultMaxBufferSize,
     } : {
-      enabled: false,
+      enabled: this.defaultBufferEnabled, // Enable buffering by default
       timeout: this.defaultBufferTimeout,
       maxSize: this.defaultMaxBufferSize,
     };
@@ -157,7 +158,7 @@ export class WebhookController extends EventController implements EventControlle
       }
     }
     
-    const bufferEnabled = bufferConfig?.enabled ?? false;
+    const bufferEnabled = bufferConfig?.enabled ?? this.defaultBufferEnabled;
     const bufferTimeout = bufferConfig?.timeout ?? this.defaultBufferTimeout;
     const maxBufferSize = bufferConfig?.maxSize ?? this.defaultMaxBufferSize;
 

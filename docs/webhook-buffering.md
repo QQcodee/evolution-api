@@ -4,7 +4,7 @@ This feature allows the Evolution API to buffer multiple consecutive messages fr
 
 ## Configuration
 
-You can enable and configure message buffering in the webhook settings for each instance:
+Message buffering is **enabled by default** for all instances with a batch size of 10 messages. You can customize the buffering behavior in the webhook settings for each instance:
 
 ```json
 {
@@ -13,9 +13,9 @@ You can enable and configure message buffering in the webhook settings for each 
     "url": "https://your-webhook-url.com",
     "events": ["MESSAGES_UPSERT", "SEND_MESSAGE"],
     "buffer": {
-      "enabled": true,       // Enable message buffering
+      "enabled": true,       // Already enabled by default
       "timeout": 3000,       // Wait time in milliseconds before sending buffered messages
-      "maxSize": 10          // Maximum number of messages to buffer before sending
+      "maxSize": 10          // Default maximum number of messages to buffer before sending
     }
   }
 }
@@ -23,7 +23,7 @@ You can enable and configure message buffering in the webhook settings for each 
 
 ## How it Works
 
-1. When buffering is enabled, messages from the same sender and with the same event type are collected into a buffer.
+1. Messages from the same sender and with the same event type are automatically collected into a buffer.
 2. The buffer is sent to the webhook endpoint when:
    - The buffer timeout expires (default: 3 seconds)
    - The buffer reaches the maximum size (default: 10 messages)
@@ -41,7 +41,7 @@ You can enable and configure message buffering in the webhook settings for each 
     { /* message 2 */ },
     { /* message 3 */ }
   ],
-  "count": 3,           // Number of messages in this batch
+  "count": 3,           // Number of messages in this batch (typically up to 10 by default)
   "isBuffered": true,   // Indicates this is a buffered webhook call
   "date_time": "2025-08-19T18:00:00.000Z"
 }
