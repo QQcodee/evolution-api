@@ -24,7 +24,7 @@ export class WebhookController extends EventController implements EventControlle
   }> = new Map();
   
   // Default buffer settings
-  private readonly defaultBufferTimeout = 30000; // 30 seconds
+  private readonly defaultBufferTimeout = 45000; // 45 seconds
   private readonly defaultMaxBufferSize = 50; // 50 messages
   private readonly defaultBufferEnabled = true; // Enable buffering by default
 
@@ -70,11 +70,11 @@ export class WebhookController extends EventController implements EventControlle
     // Prepare buffer settings from data or use defaults
     const bufferSettings = data.webhook?.buffer ? {
       enabled: data.webhook.buffer.enabled ?? this.defaultBufferEnabled,
-      timeout: 30000,
+      timeout: 45000,
       maxSize: data.webhook.buffer.maxSize ?? this.defaultMaxBufferSize,
     } : {
       enabled: this.defaultBufferEnabled, // Enable buffering by default
-      timeout: 30000,
+      timeout: 45000,
       maxSize: this.defaultMaxBufferSize,
     };
 
@@ -160,7 +160,7 @@ export class WebhookController extends EventController implements EventControlle
     }
     
     const bufferEnabled = bufferConfig?.enabled ?? this.defaultBufferEnabled;
-    const bufferTimeout = 30000;
+    const bufferTimeout = 45000;
     const maxBufferSize = bufferConfig?.maxSize ?? this.defaultMaxBufferSize;
 
     // Check if the event should be buffered (exclude non-message events and status events)
