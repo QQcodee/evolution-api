@@ -24,8 +24,8 @@ export class WebhookController extends EventController implements EventControlle
   }> = new Map();
   
   // Default buffer settings
-  private readonly defaultBufferTimeout = 30000; // 3 seconds
-  private readonly defaultMaxBufferSize = 10; // 10 messages
+  private readonly defaultBufferTimeout = 30000; // 30 seconds
+  private readonly defaultMaxBufferSize = 50; // 50 messages
   private readonly defaultBufferEnabled = true; // Enable buffering by default
 
   constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
@@ -64,6 +64,7 @@ export class WebhookController extends EventController implements EventControlle
       if (0 === data.webhook.events.length) {
         data.webhook.events = EventController.events;
       }
+      
     }
 
     // Prepare buffer settings from data or use defaults
