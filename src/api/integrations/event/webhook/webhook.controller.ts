@@ -24,7 +24,7 @@ export class WebhookController extends EventController implements EventControlle
   }> = new Map();
   
   // Default buffer settings
-  private readonly defaultBufferTimeout = 10000; // 3 seconds
+  private readonly defaultBufferTimeout = 30000; // 3 seconds
   private readonly defaultMaxBufferSize = 10; // 10 messages
   private readonly defaultBufferEnabled = true; // Enable buffering by default
 
